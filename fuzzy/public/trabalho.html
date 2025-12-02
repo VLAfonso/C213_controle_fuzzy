@@ -1,0 +1,1121 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Sistema Fuzzy</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+// Conexão Socket.IO
+const socket = io();
+let isLiveMode = false; // Estado para controlar o modo de operação
+
+// Recebe dados de temperatura e potencia
+socket.on('mqttData', (data) => {
+    if (!isLiveMode) return;
+
+    const liveTempEl = document.getElementById('liveTemp');
+    const livePowerEl = document.getElementById('livePower');
+
+    // 1. Atualiza o painel de dados em tempo real
+    liveTempEl.innerText = `${data.temperatura.toFixed(2)} °C`;
+    livePowerEl.innerText = `${data.potencia.toFixed(2)} %`;
+
+    // 2. Atualiza os arrays de dados e labels
+    liveData.labels.push(liveData.labels.length);
+    liveData.temp.push(data.temperatura);
+    liveData.error.push(data.erro);
+    liveData.power.push(data.potencia);
+
+    // 3. Limita o histórico
+    if (liveData.labels.length > MAX_LIVE_POINTS) {
+        liveData.labels.shift();
+        liveData.temp.shift();
+        liveData.error.shift();
+        liveData.power.shift();
+    }
+    
+    // 4. Atualiza os gráficos de simulação
+    const setpointVal = parseFloat(document.getElementById("setpoint").value);
+    atualizarGraficosSimulacao(liveData.labels, liveData.temp, liveData.error, setpointVal);
+});
+
+// Recebe alertas
+socket.on('mqttAlert', (payload) => {
+    if (!isLiveMode) return;
+
+    const liveAlertEl = document.getElementById('liveAlert');
+    
+    let message = "Alerta Ativo!";
+    let color = "#f59e0b";
+
+    if (payload === '1') {
+        message = "CRÍTICO: Temperatura fora da faixa (CRAC desligado ou sobrecarregado)";
+        color = "#dc2626";
+    } else if (payload === '3') {
+        message = "AVISO: Mudança de temperatura brusca detectada";
+        color = "#f59e0b";
+    } else {
+        message = `Alerta Desconhecido: ${payload}`;
+    }
+
+    liveAlertEl.innerText = message;
+    liveAlertEl.style.color = color;
+
+    if (payload === '3') {
+        setTimeout(() => {
+            if (liveAlertEl.innerText.includes("Mudança de temperatura brusca")) {
+                liveAlertEl.innerText = "Nenhum Alerta Ativo";
+                liveAlertEl.style.color = "#6ee7b7";
+            }
+        }, 8000); // Limpa após 8 segundos
+    }
+});
+
+socket.on('connect', () => {
+    console.log('Conectado ao servidor Node.js via Socket.IO!');
+});
+</script>
+
+<style>
+:root{
+    --bg:#0f1720;
+    --card:#111418;
+    --muted:#9aa6b2;
+    --accent:#6ee7b7;
+    --btn:#16a34a;
+    --btn-warn:#f59e0b;
+    --btn-danger:#dc2626;
+    --glass: rgba(255,255,255,0.03);
+    --text:#e6eef3;
+}
+.modo-claro{
+    --bg:#f8fafc;
+    --card:#ffffff;
+    --muted:#64748b;
+    --accent:#10b981;
+    --btn:#16a34a;
+    --btn-warn:#f59e0b;
+    --btn-danger:#dc2626;
+    --glass: rgba(0,0,0,0.03);
+    --text:#1f2937;
+}
+html,body{
+    height:100%;
+    margin:0;
+    font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Arial;
+    background:var(--bg);
+    color:var(--text);
+}
+.app{max-width:1200px;margin:18px auto;padding:12px}
+header{display:flex;align-items:center;gap:16px;margin-bottom:12px}
+h1{margin:0;font-size:20px;color:var(--accent)}
+.grid{display:grid;grid-template-columns:420px 1fr;gap:14px}
+.card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:16px;border-radius:10px;box-shadow:0 8px 20px rgba(2,6,23,0.6)}
+.card h2{margin:0 0 8px;color:#9fe7c9}
+label{display:block;font-size:13px;color:var(--muted);margin-top:8px; margin-left: -8px;}
+input[type=number], input[type=text], select{
+    width:100%;padding:8px;border-radius:8px;background:var(--glass);border:1px solid rgba(255,255,255,0.04);color: var(--text);
+    margin-top:6px; margin-left: -8px;
+}
+.row{display:flex;gap:8px;align-items:center}
+.btn{padding:10px 12px;border-radius:8px;border:0;color:white;cursor:pointer;margin-top:10px}
+.btn.primary{background:var(--btn)}
+.btn.warn{background:var(--btn-warn)}
+.btn.danger{background:var(--btn-danger)}
+.small{font-size:13px;color:var(--muted)}
+.output{font-weight:700;font-size:18px;color:#fff;margin-top:6px}
+canvas{background:transparent;border-radius:8px}
+.charts{display:grid;grid-template-rows:auto auto;gap:12px}
+.mf-row{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:8px}
+footer{margin-top:12px;color:var(--muted);font-size:13px}
+.stats-container{display:none;margin-top:12px;padding:12px;background:var(--glass);border-radius:8px;border:1px solid rgba(255,255,255,0.05)}
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat-item{margin-bottom:6px}
+.stat-label{font-size:12px;color:var(--muted)}
+.stat-value{font-size:14px;font-weight:600;color:#fff}
+@media(max-width:900px){ .grid{grid-template-columns:1fr; } .mf-row{grid-template-columns:1fr} .stats-grid{grid-template-columns:1fr} }
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background: var(--glass);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.04);
+  padding-right: 28px;
+  position: relative;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text) 50%),
+    linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(1em + 2px),
+    calc(100% - 9px) calc(1em + 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+select option {
+  background: var(--card);
+  color: var(--text);
+}
+
+select:focus,
+select:active {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(110,231,183,0.08);
+  background: var(--card);
+  color: var(--text);
+}
+
+select::-ms-expand { display: none; }
+</style>
+</head>
+<body>
+<div class="app">
+    <header>
+    <h1>Controle Fuzzy MISO — PD</h1>
+    <button class="btn" onclick="alternarModo()" style="margin-left: auto; background: var(--muted);">
+        🌙 Modo Escuro
+    </button>
+    </header>
+
+    <div class="grid">
+    <!-- Inputs e controles -->
+    <div class="card">
+        <h2>Painel de Controle PD</h2>
+
+        <label>Setpoint (°C)</label>
+        <select id="setpoint">
+            <option value="16">16</option>
+            <option value="22" selected>22</option>
+            <option value="25">25</option>
+            <option value="32">32</option>
+        </select>
+
+        <label>Temperatura Atual (°C)</label>
+        <input id="tempAtual" type="number" step="0.1" value="32">
+
+        <label>Temperatura Externa (Text °C)</label>
+        <input id="tempExt" type="number" step="0.1" value="25">
+
+        <label>Carga Térmica (Qest %)</label>
+        <input id="carga" type="number" step="1" value="40">
+
+        <label>Cenário</label>
+        <select id="cenário" onchange="aplicarCenario()"> 
+            <option value="-1" selected>Sem Cenário</option> 
+            <option value="0">Dia comum</option>
+            <option value="1">Madrugada comum</option>
+            <option value="2">Dia com alta demanda</option>
+            <option value="3">Dia quente com alta demanda</option>
+        </select>
+
+        <button class="btn primary" style="margin-top: 10px;" onclick="enviarSetpoint()">
+            Enviar ao MQTT
+        </button>
+
+        <hr style="border:none;border-top:1px solid rgba(255,255,255,0.04);margin:12px 0">
+
+        <h2>Operação em Tempo Real (MQTT)</h2>
+        <button id="liveModeBtn" class="btn danger" 
+                onclick="window.open('index.html', '_blank')">
+            ▶️ Ir para o Dashboard Principal
+        </button>
+
+        <div id="livePanel" class="stats-container" style="display:none; background: #1f3a53;">
+            <h3 style="margin:0 0 8px;color:var(--accent);font-size:14px">Status do Sistema (MQTT)</h3>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">Temperatura Recebida</div>
+                    <div id="liveTemp" class="stat-value">—</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Potência CRAC (Fuzzy)</div>
+                    <div id="livePower" class="stat-value">—</div>
+                </div>
+                <div class="stat-item" style="grid-column: span 2;">
+                    <div class="stat-label">⚠️ Alerta Atual</div>
+                    <div id="liveAlert" class="stat-value" style="color:var(--accent); font-size:16px;">Nenhum Alerta Ativo</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gráficos a direita -->
+    <div class="card">
+        <h2>Visualizações & Funções de Pertinência</h2>
+
+        <div class="mf-row">
+        <div>
+            <div class="small">Funções do Erro (e)</div>
+            <canvas id="chartErro" height="220"></canvas>
+        </div>
+        <div>
+            <div class="small">Funções da Variação do Erro (∆e)</div>
+            <canvas id="chartDE" height="220"></canvas>
+        </div>
+        </div>
+
+        <div style="margin-top:10px">
+        <div class="small">Funções da Saída (PCRAC)</div>
+        <canvas id="chartOut" height="200"></canvas>
+        </div>
+
+        <hr style="border:none;border-top:1px solid rgba(255,255,255,0.04);margin:12px 0">
+    </div>
+    </div>
+</div>
+
+<script>
+
+// Parâmetros
+const tol_erro = 2;
+const passo_erro = 0.1;
+const passo_var_erro = 0.01;
+
+// 🌟 Novas variáveis globais
+let liveData = { labels: [], temp: [], error: [], power: [] };
+const MAX_LIVE_POINTS = 50; // Limite de pontos para o modo ao vivo
+
+const CENARIOS = {
+    '0': [25, 40],  
+    '1': [13, 15],  
+    '2': [25, 85],  
+    '3': [30, 85]   
+};
+
+function aplicarCenario() {
+    const selectEl = document.getElementById('cenário');
+    const cenarioKey = selectEl.value; 
+
+    const tempExtEl = document.getElementById('tempExt');
+    const cargaEl = document.getElementById('carga');
+
+    if (cenarioKey === '-1') {
+        tempExtEl.disabled = false;
+        cargaEl.disabled = false;
+        console.log("Modo Manual (Sem Cenário) ativado. Valores customizáveis.");
+        return; 
+    }
+
+    const valores = CENARIOS[cenarioKey];
+
+    if (valores) {
+        const tempExterna = valores[0];
+        const cargaTermica = valores[1];
+
+        tempExtEl.disabled = true;
+        cargaEl.disabled = true;
+
+        tempExtEl.value = tempExterna;
+        cargaEl.value = cargaTermica;
+        
+        console.log(`Cenário ${parseInt(cenarioKey) + 1} aplicado: Text=${tempExterna}°C, Qest=${cargaTermica}%`);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    resetar();
+    aplicarCenario();
+});
+
+window.onload = function () {
+    connectMQTT();
+
+    iniciarModoAoVivo(); 
+};
+
+// Função para alternar o modo ao vivo
+function toggleLiveMode() {
+    isLiveMode = !isLiveMode;
+    const btn = document.getElementById('liveModeBtn');
+    const panel = document.getElementById('livePanel');
+    const gridInputs = document.querySelectorAll('.card input, .card select, .row button:not(#liveModeBtn)');
+    const simCharts = [simTempChart, simErroChart];
+
+    if (isLiveMode) {
+        btn.textContent = '⏸️ Parar Modo Ao Vivo';
+        btn.classList.remove('danger');
+        btn.classList.add('primary');
+        panel.style.display = 'block';
+
+        gridInputs.forEach(el => el.disabled = true);
+
+        liveData = { labels: [], temp: [], error: [], power: [] };
+        atualizarGraficosSimulacao([], [], [], 0);
+        simCharts.forEach(chart => {
+            chart.options.animation = false;
+            chart.options.scales.x.title.text = 'Tempo (segundos)';
+            chart.update();
+        });
+
+        document.getElementById("statsContainer").style.display = "none";
+        alert("Modo Ao Vivo Ativado!");
+    } else {
+        btn.textContent = '▶️ Iniciar Modo Ao Vivo';
+        btn.classList.remove('primary');
+        btn.classList.add('danger');
+        panel.style.display = 'none';
+
+        gridInputs.forEach(el => el.disabled = false);
+
+        simCharts.forEach(chart => {
+            chart.options.animation = true;
+            chart.options.scales.x.title.text = 'Tempo (passos)';
+            chart.update();
+        });
+
+        document.getElementById("liveTemp").innerText = '—';
+        document.getElementById("livePower").innerText = '—';
+        document.getElementById("liveAlert").innerText = 'Nenhum Alerta Ativo';
+
+        alert("Modo Ao Vivo Desativado.");
+    }
+}
+
+// Controle de modo claro/escuro
+function alternarModo() {
+    const body = document.body;
+    const botaoModo = document.querySelector('header .btn');
+    
+    if (document.documentElement.classList.contains('modo-claro')) {
+        document.documentElement.classList.remove('modo-claro');
+        botaoModo.textContent = '☀️ Modo Claro';
+        botaoModo.style.background = 'var(--muted)';
+        localStorage.setItem('modo', 'escuro');
+    } else {
+        document.documentElement.classList.add('modo-claro');
+        botaoModo.textContent = '🌙 Modo Escuro';
+        botaoModo.style.background = 'var(--muted)';
+        localStorage.setItem('modo', 'claro');
+    }
+    
+    // Atualizar cores dos gráficos
+    atualizarCoresGraficos();
+}
+
+// Atualizar cores dos gráficos baseado no modo
+function atualizarCoresGraficos() {
+    const isModoClaro = document.documentElement.classList.contains('modo-claro');
+    const corTexto = isModoClaro ? '#374151' : '#9aa6b2';
+    const corGrade = isModoClaro ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)';
+    
+    const graficos = [chartErro, chartDE, chartOut, simTempChart, simErroChart];
+    
+    graficos.forEach(chart => {
+        if (chart) {
+            chart.options.scales.x.ticks.color = corTexto;
+            chart.options.scales.y.ticks.color = corTexto;
+            chart.options.scales.x.grid.color = corGrade;
+            chart.options.scales.y.grid.color = corGrade;
+            
+            if (chart.options.scales.x.title) {
+                chart.options.scales.x.title.color = corTexto;
+            }
+            if (chart.options.scales.y.title) {
+                chart.options.scales.y.title.color = corTexto;
+            }
+            
+            chart.update();
+        }
+    });
+}
+
+// Carregar modo salvo ao iniciar
+function carregarModoSalvo() {
+    const modoSalvo = localStorage.getItem('modo');
+    const botaoModo = document.querySelector('header .btn');
+    
+    if (modoSalvo === 'claro') {
+        document.documentElement.classList.add('modo-claro');
+        botaoModo.textContent = '🌙 Modo Escuro';
+    } else {
+        botaoModo.textContent = '☀️ Modo Claro';
+    }
+    botaoModo.style.background = 'var(--muted)';
+}
+
+// Chamar quando a página carregar
+document.addEventListener('DOMContentLoaded', function() {
+    carregarModoSalvo();
+    resetar();
+});
+
+// Universos de discurso
+const uniErro = linspace(-16, 16, Math.round((16 - (-16)) / passo_erro) + 1);
+const uniDE = linspace(-2*tol_erro, 2*tol_erro, Math.round((4*tol_erro) / passo_var_erro) + 1);
+const uniOut = linspace(0, 100, 101);
+
+// Funções de pertinência
+function mfErroSets(){
+    return {
+        MN: (x)=> trapmf(x, [-16, -16, -2*tol_erro,-tol_erro]),
+        PN: (x)=> trimf(x, [-2*tol_erro,-tol_erro,0]),
+        ZE: (x)=> trimf(x, [-tol_erro, 0, tol_erro]),
+        PP: (x)=> trimf(x, [0, tol_erro, 2*tol_erro]),
+        MP: (x)=> trapmf(x, [tol_erro, 2*tol_erro, 16+passo_erro,16+passo_erro])
+    };
+}
+
+function mfDESets(){
+    return {
+        MN: (x)=> trapmf(x, [-2*tol_erro, -2*tol_erro, -2*tol_erro/10,-tol_erro/10]),
+        PN: (x)=> trimf(x, [-2*tol_erro/10,-tol_erro/10,0]),
+        ZE: (x)=> trimf(x, [-tol_erro/10, 0, tol_erro/10]),
+        PP: (x)=> trimf(x, [0, tol_erro/10, 2*tol_erro/10]),
+        MP: (x)=> trapmf(x, [tol_erro/10, 2*tol_erro/10, 2*tol_erro+passo_var_erro,2*tol_erro+passo_var_erro])
+    };
+}
+
+function mfOutSets(){
+    return {
+        MB: (x)=> trimf(x, [0,0,25]),
+        B:  (x)=> trimf(x, [0,25,50]),
+        M:  (x)=> trimf(x, [25,50,75]),
+        A:  (x)=> trimf(x, [50,75,101]),
+        MA: (x)=> trimf(x, [75,101,101])
+    };
+}
+
+// Regras
+const regras = [
+    ['MN','MN','MB'],['PN','MN','MB'],['ZE','MN','B'],['PP','MN','M'],['MP','MN','M'],
+    ['MN','PN','MB'],['PN','PN','B'],['ZE','PN','B'],['PP','PN','M'],['MP','PN','A'],
+    ['MN','ZE','MB'],['PN','ZE','B'],['ZE','ZE','B'],['PP','ZE','M'],['MP','ZE','A'],
+    ['MN','PP','B'],['PN','PP','M'],['ZE','PP','M'],['PP','PP','A'],['MP','PP','MA'],
+    ['MN','MP','M'],['PN','MP','M'],['ZE','MP','A'],['PP','MP','MA'],['MP','MP','MA']
+];
+
+// Funções de transferência
+function funcao_transferencia(temp_atual, potencia, carga_termica, temp_externa){
+    return 0.9 * temp_atual - 0.08 * potencia + 0.05 * carga_termica + 0.02 * temp_externa + 3.5;
+}
+
+// Funcão controlador_fuzzy
+function controlador_fuzzy(set_point, temp_atual, carga_termica, temp_externa, erro_anterior) {
+    const erro_atual = temp_atual - set_point;
+    const variacao_erro = erro_atual - erro_anterior;
+    
+    const potencia_atual = sistema_miso(erro_atual, variacao_erro);
+    const nova_temp = funcao_transferencia(temp_atual, potencia_atual, carga_termica, temp_externa);
+
+    return { nova_temp, erro_atual, potencia_atual };
+}
+
+function sistema_miso(erro, variacao_erro) {
+    const res = inferir(erro, variacao_erro);
+    return res.crisp;
+}
+
+// Funções auxiliares
+function linspace(a,b,n){
+    const out=[]; if(n<=1){out.push(a);return out;}
+    const step=(b-a)/(n-1);
+    for(let i=0;i<n;i++) out.push(+(a + step*i).toFixed(6));
+    return out;
+}
+
+function trimf(x, [a,b,c]){
+    if (x <= a || x >= c) return 0;
+    if (a === b && x === b) return 1;
+    if (b === c && x === b) return 1;
+    if (x === b) return 1;
+    if (x < b) return (x - a) / (b - a);
+    return (c - x) / (c - b);
+}
+
+function trapmf(x, [a,b,c,d]){
+    if (x <= a || x >= d) return 0;
+    if (x >= b && x <= c) return 1;
+    if (x > a && x < b) return (x - a) / (b - a);
+    return (d - x) / (d - c);
+}
+
+// Motor de Inferência Mamdani
+const mfE = mfErroSets();
+const mfDE = mfDESets();
+const mfOUT = mfOutSets();
+
+const curveE = {
+    MN: uniErro.map(x=>mfE.MN(x)),
+    PN: uniErro.map(x=>mfE.PN(x)),
+    ZE: uniErro.map(x=>mfE.ZE(x)),
+    PP: uniErro.map(x=>mfE.PP(x)),
+    MP: uniErro.map(x=>mfE.MP(x))
+};
+const curveDE = {
+    MN: uniDE.map(x=>mfDE.MN(x)),
+    PN: uniDE.map(x=>mfDE.PN(x)),
+    ZE: uniDE.map(x=>mfDE.ZE(x)),
+    PP: uniDE.map(x=>mfDE.PP(x)),
+    MP: uniDE.map(x=>mfDE.MP(x))
+};
+const curveOUT = {
+    MB: uniOut.map(x=>mfOUT.MB(x)),
+    B:  uniOut.map(x=>mfOUT.B(x)),
+    M:  uniOut.map(x=>mfOUT.M(x)),
+    A:  uniOut.map(x=>mfOUT.A(x)),
+    MA: uniOut.map(x=>mfOUT.MA(x))
+};
+
+function inferir(erroVal, deVal){
+    const degE = {
+        MN: mfE.MN(erroVal),
+        PN: mfE.PN(erroVal),
+        ZE: mfE.ZE(erroVal),
+        PP: mfE.PP(erroVal),
+        MP: mfE.MP(erroVal)
+    };
+    const degDE = {
+        MN: mfDE.MN(deVal),
+        PN: mfDE.PN(deVal),
+        ZE: mfDE.ZE(deVal),
+        PP: mfDE.PP(deVal),
+        MP: mfDE.MP(deVal)
+    };
+
+    const outActivations = {MB:0,B:0,M:0,A:0,MA:0};
+    for(const r of regras){
+        const [le, lde, out] = r;
+        const act = Math.min(degE[le]||0, degDE[lde]||0);
+        if(act > outActivations[out]) outActivations[out] = act;
+    }
+
+    const aggregated = uniOut.map(x=>{
+        return Math.max(
+        Math.min(outActivations.MB, mfOUT.MB(x)),
+        Math.min(outActivations.B,  mfOUT.B(x)),
+        Math.min(outActivations.M,  mfOUT.M(x)),
+        Math.min(outActivations.A,  mfOUT.A(x)),
+        Math.min(outActivations.MA, mfOUT.MA(x))
+        );
+    });
+
+    let num=0, den=0;
+    for(let i=0;i<uniOut.length;i++){
+        num += uniOut[i]*aggregated[i];
+        den += aggregated[i];
+    }
+    const crisp = den === 0 ? 0 : num/den;
+    return {crisp, degE, degDE, outActivations, aggregated};
+}
+
+// Código de interface
+let chartErro, chartDE, chartOut, simTempChart, simErroChart;
+
+function criarGraficos(){
+    const ctxE = document.getElementById('chartErro').getContext('2d');
+    chartErro = new Chart(ctxE, {
+        type:'line',
+        data:{
+        labels: uniErro,
+        datasets:[
+            {label:'MN', data:curveE.MN, fill:false, tension:0.2},
+            {label:'PN', data:curveE.PN, fill:false, tension:0.2},
+            {label:'ZE', data:curveE.ZE, fill:false, tension:0.2},
+            {label:'PP', data:curveE.PP, fill:false, tension:0.2},
+            {label:'MP', data:curveE.MP, fill:false, tension:0.2}
+        ]
+        },
+        options:{
+            plugins:{
+                legend:{display:true},
+                zoom:{
+                    zoom:{
+                        wheel:{enabled:true},
+                        pinch:{enabled:true},
+                        mode:'x'
+                    },
+                    pan:{
+                        enabled:true,
+                        mode:'x'
+                    }
+                }
+            },
+            scales:{
+                x:{
+                    display:true,
+                    title: {
+                        display: true,
+                        text: 'Erro (°C)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2',
+                        maxTicksLimit: 10
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                }
+            }
+        }
+    });
+
+    const ctxDE = document.getElementById('chartDE').getContext('2d');
+    chartDE = new Chart(ctxDE, {
+        type:'line',
+        data:{
+        labels: uniDE,
+        datasets:[
+            {label:'MN', data:curveDE.MN, fill:false, tension:0.2},
+            {label:'PN', data:curveDE.PN, fill:false, tension:0.2},
+            {label:'ZE', data:curveDE.ZE, fill:false, tension:0.2},
+            {label:'PP', data:curveDE.PP, fill:false, tension:0.2},
+            {label:'MP', data:curveDE.MP, fill:false, tension:0.2}
+        ]
+        },
+        options:{
+            plugins:{
+                legend:{display:true},
+                zoom:{
+                    zoom:{
+                        wheel:{enabled:true},
+                        pinch:{enabled:true},
+                        mode:'x'
+                    },
+                    pan:{
+                        enabled:true,
+                        mode:'x'
+                    }
+                }
+            },
+            scales:{
+                x:{
+                    display:true,
+                    title: {
+                        display: true,
+                        text: 'Variação do Erro (°C)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2',
+                        maxTicksLimit: 10
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                }
+            }
+        }
+    });
+
+    const ctxOut = document.getElementById('chartOut').getContext('2d');
+    chartOut = new Chart(ctxOut, {
+        type:'line',
+        data:{
+        labels: uniOut,
+        datasets:[
+            {label:'MB', data:curveOUT.MB, fill:false, tension:0.2},
+            {label:'B',  data:curveOUT.B,  fill:false, tension:0.2},
+            {label:'M',  data:curveOUT.M,  fill:false, tension:0.2},
+            {label:'A',  data:curveOUT.A,  fill:false, tension:0.2},
+            {label:'MA', data:curveOUT.MA, fill:false, tension:0.2}
+        ]
+        },
+        options:{
+            plugins:{
+                legend:{display:true},
+                zoom:{
+                    zoom:{
+                        wheel:{enabled:true},
+                        pinch:{enabled:true},
+                        mode:'x'
+                    },
+                    pan:{
+                        enabled:true,
+                        mode:'x'
+                    }
+                }
+            },
+            scales:{
+                x:{
+                    display:true,
+                    title: {
+                        display: true,
+                        text: 'Potência CRAC (%)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2',
+                        maxTicksLimit: 10
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                }
+            }
+        }
+    });
+
+    const ctxS = document.getElementById('simTemp').getContext('2d');
+    simTempChart = new Chart(ctxS, {
+        type:'line',
+        data:{
+            labels:[],
+            datasets:[
+                {label:'Temperatura (°C)',data:[],fill:false,tension:0.15, borderColor:'#6ee7b7'},
+                {label:'Setpoint',data:[],fill:false,borderColor:'#f59e0b', borderDash:[5,5], tension:0}
+            ]
+        },
+        options:{
+            plugins:{
+                legend:{display:true},
+                zoom:{
+                    zoom:{
+                        wheel:{enabled:true},
+                        pinch:{enabled:true},
+                        mode:'x'
+                    },
+                    pan:{
+                        enabled:true,
+                        mode:'x'
+                    }
+                }
+            },
+            scales:{
+                x:{
+                    display:true,
+                    title: {
+                        display: true,
+                        text: 'Tempo (passos)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: 'Temperatura (°C)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                }
+            }
+        }
+    });
+
+    const ctxSE = document.getElementById('simErro').getContext('2d');
+    simErroChart = new Chart(ctxSE, {
+        type:'line',
+        data:{labels:[],datasets:[{label:'Erro (°C)',data:[],fill:false,tension:0.15, borderColor:'#ef4444'}]},
+        options:{
+            plugins:{
+                legend:{display:true},
+                zoom:{
+                    zoom:{
+                        wheel:{enabled:true},
+                        pinch:{enabled:true},
+                        mode:'x'
+                    },
+                    pan:{
+                        enabled:true,
+                        mode:'x'
+                    }
+                }
+            },
+            scales:{
+                x:{
+                    display:true,
+                    title: {
+                        display: true,
+                        text: 'Tempo (passos)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: 'Erro (°C)',
+                        color: '#9aa6b2'
+                    },
+                    ticks: {
+                        color: '#9aa6b2'
+                    },
+                    grid: {
+                        color: 'rgba(255,255,255,0.1)'
+                    }
+                }
+            }
+        }
+    });
+}
+criarGraficos();
+
+// Funções principais
+function calcularPotencia(){
+    const setpointVal = parseFloat(document.getElementById("setpoint").value);
+    const tempAtualVal = parseFloat(document.getElementById("tempAtual").value);
+    const erroAnteriorSimulacao = 0.0;
+
+    const erroAtual = tempAtualVal - setpointVal;
+    const dErro = erroAtual - erroAnteriorSimulacao;
+
+    const res = inferir(erroAtual, dErro);
+
+    document.getElementById("saida").innerText = res.crisp.toFixed(3) + ' %';
+    document.getElementById("erroAtualTxt").innerText = erroAtual.toFixed(4);
+    document.getElementById("dErroTxt").innerText = dErro.toFixed(6);
+
+    resetarPlotagemMF();
+    plotActivations(res);
+}
+
+function resetarPlotagemMF(){
+    chartErro.data.datasets = [
+        {label:'MN', data:curveE.MN, fill:false, tension:0.2},
+        {label:'PN', data:curveE.PN, fill:false, tension:0.2},
+        {label:'ZE', data:curveE.ZE, fill:false, tension:0.2},
+        {label:'PP', data:curveE.PP, fill:false, tension:0.2},
+        {label:'MP', data:curveE.MP, fill:false, tension:0.2}
+    ]; chartErro.update();
+
+    chartDE.data.datasets = [
+        {label:'MN', data:curveDE.MN, fill:false, tension:0.2},
+        {label:'PN', data:curveDE.PN, fill:false, tension:0.2},
+        {label:'ZE', data:curveDE.ZE, fill:false, tension:0.2},
+        {label:'PP', data:curveDE.PP, fill:false, tension:0.2},
+        {label:'MP', data:curveDE.MP, fill:false, tension:0.2}
+    ]; chartDE.update();
+
+    chartOut.data.datasets = [
+        {label:'MB', data:curveOUT.MB, fill:false, tension:0.2},
+        {label:'B',  data:curveOUT.B,  fill:false, tension:0.2},
+        {label:'M',  data:curveOUT.M,  fill:false, tension:0.2},
+        {label:'A',  data:curveOUT.A,  fill:false, tension:0.2},
+        {label:'MA', data:curveOUT.MA, fill:false, tension:0.2}
+    ]; chartOut.update();
+}
+
+function aplicarControle(){
+    const setpointVal = parseFloat(document.getElementById("setpoint").value);
+    let tempVal = parseFloat(document.getElementById("tempAtual").value);
+    const tempExtVal = parseFloat(document.getElementById("tempExt").value);
+    const cargaVal = parseFloat(document.getElementById("carga").value);
+    const erroAnteriorSimulacao = 0.0;
+
+    const resultado = controlador_fuzzy(setpointVal, tempVal, cargaVal, tempExtVal, erroAnteriorSimulacao);
+
+    document.getElementById('saida').innerText = resultado.potencia_atual.toFixed(3) + ' %';
+    document.getElementById('erroAtualTxt').innerText = resultado.erro_atual.toFixed(4);
+    document.getElementById('dErroTxt').innerText = (resultado.erro_atual - erroAnteriorSimulacao).toFixed(6);
+    document.getElementById('tempAtual').value = resultado.nova_temp.toFixed(4);
+
+    const res = inferir(resultado.erro_atual, resultado.erro_atual - erroAnteriorSimulacao);
+    plotActivations(res);
+}
+
+function simular() {
+    const setpoint = parseFloat(document.getElementById("setpoint").value);
+    let temp_atual = parseFloat(document.getElementById("tempAtual").value);
+    const temp_externa = parseFloat(document.getElementById("tempExt").value);
+    const carga_termica = parseFloat(document.getElementById("carga").value);
+    let erro_anterior = 0.0;
+    const passos = parseInt(document.getElementById("passos").value);
+
+    const historico_temp = [temp_atual];
+    const historico_erro = [temp_atual - setpoint];
+    const labels = [0];
+
+    for (let i = 1; i <= passos; i++) {
+        const resultado = controlador_fuzzy(setpoint, temp_atual, carga_termica, temp_externa, erro_anterior);
+        
+        historico_temp.push(resultado.nova_temp);
+        historico_erro.push(resultado.erro_atual);
+        labels.push(i);
+
+        erro_anterior = resultado.erro_atual;
+        temp_atual = resultado.nova_temp;
+    }
+
+    // Atualiza gráficos
+    atualizarGraficosSimulacao(labels, historico_temp, historico_erro, setpoint);
+
+    // Cálculo estatístico
+    const tempMedia = historico_temp.reduce((a,b)=>a+b,0)/historico_temp.length;
+    const tempMin = Math.min(...historico_temp);
+    const tempMax = Math.max(...historico_temp);
+    const deltaTemp = tempMax - tempMin;
+
+    const erroMedio = historico_erro.reduce((a,b)=>a+b,0)/historico_erro.length;
+    const erroMin = Math.min(...historico_erro);
+
+    // Exibe estatísticas
+    document.getElementById("tempMedia").innerText = tempMedia.toFixed(2);
+    document.getElementById("tempMin").innerText = tempMin.toFixed(2);
+    document.getElementById("tempMax").innerText = tempMax.toFixed(2);
+    document.getElementById("deltaTemp").innerText = deltaTemp.toFixed(2);
+    document.getElementById("erroMedio").innerText = erroMedio.toFixed(2);
+    document.getElementById("erroMin").innerText = erroMin.toFixed(2);
+
+    document.getElementById("statsContainer").style.display = "block";
+}
+
+// Função para atualizar gráficos da simulação
+function atualizarGraficosSimulacao(labels, temperaturas, erros, setpoint) {
+    // Gráfico de temperatura
+    simTempChart.data.labels = labels;
+    simTempChart.data.datasets[0].data = temperaturas;
+    simTempChart.data.datasets[1].data = labels.map(() => setpoint);
+    simTempChart.update();
+
+    // Gráfico de erro
+    simErroChart.data.labels = labels;
+    simErroChart.data.datasets[0].data = erros;
+    simErroChart.update();
+}
+
+function plotActivations(result){
+    const repE = {MN:-12, PN:-1.5, ZE:0, PP:1.5, MP:12};
+    const markersE = Object.keys(result.degE).map(k=>({
+        label: k + ' (act)',
+        data: uniErro.map(x => (Math.abs(x - repE[k]) < 0.0001 ? result.degE[k] : null)),
+        pointRadius:6, showLine:false
+    }));
+    chartErro.data.datasets = [
+        {label:'MN', data:curveE.MN, fill:false, tension:0.2},
+        {label:'PN', data:curveE.PN, fill:false, tension:0.2},
+        {label:'ZE', data:curveE.ZE, fill:false, tension:0.2},
+        {label:'PP', data:curveE.PP, fill:false, tension:0.2},
+        {label:'MP', data:curveE.MP, fill:false, tension:0.2},
+        ...markersE
+    ]; chartErro.update();
+
+    const repDE = {MN:-3.5, PN:-1, ZE:0, PP:1, MP:3.5};
+    const markersDE = Object.keys(result.degDE).map(k=>({
+        label: k + ' (act)',
+        data: uniDE.map(x => (Math.abs(x - repDE[k]) < 0.0001 ? result.degDE[k] : null)),
+        pointRadius:6, showLine:false
+    }));
+    chartDE.data.datasets = [
+        {label:'MN', data:curveDE.MN, fill:false, tension:0.2},
+        {label:'PN', data:curveDE.PN, fill:false, tension:0.2},
+        {label:'ZE', data:curveDE.ZE, fill:false, tension:0.2},
+        {label:'PP', data:curveDE.PP, fill:false, tension:0.2},
+        {label:'MP', data:curveDE.MP, fill:false, tension:0.2},
+        ...markersDE
+    ]; chartDE.update();
+
+    chartOut.data.datasets = [
+        {label:'MB', data:curveOUT.MB, fill:false, tension:0.2},
+        {label:'B',  data:curveOUT.B,  fill:false, tension:0.2},
+        {label:'M',  data:curveOUT.M,  fill:false, tension:0.2},
+        {label:'A',  data:curveOUT.A,  fill:false, tension:0.2},
+        {label:'MA', data:curveOUT.MA, fill:false, tension:0.2},
+        {label:'Agregado', data: result.aggregated, fill:true, tension:0.2, backgroundColor:'rgba(110,231,183,0.08)', borderColor:'rgba(110,231,183,0.5)'}
+    ]; chartOut.update();
+}
+
+function resetar(){
+    document.getElementById('tempAtual').value = 32;
+    document.getElementById('tempExt').value = 25;
+    document.getElementById('carga').value = 40;
+    document.getElementById('setpoint').value = 22;
+    document.getElementById('passos').value = 60;
+    
+    document.getElementById('saida').innerText = '—';
+    document.getElementById('erroAtualTxt').innerText = '—';
+    document.getElementById('dErroTxt').innerText = '—';
+    
+    document.getElementById('statsContainer').style.display = 'none';
+    
+    simTempChart.data.labels = []; 
+    simTempChart.data.datasets[0].data = []; 
+    simTempChart.data.datasets[1].data = [];
+    simTempChart.update();
+    
+    simErroChart.data.labels = []; 
+    simErroChart.data.datasets[0].data = []; 
+    simErroChart.update();
+    
+    resetarPlotagemMF();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    resetar();
+});
+
+(function fixSelectOptionsForDark() {
+  const sel = document.getElementById('setpoint');
+
+  function applyOptionStyles() {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue('--card').trim() || '#111418';
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e6eef3';
+    for (const opt of sel.options) {
+      opt.style.backgroundColor = bg;
+      opt.style.color = color;
+    }
+  }
+
+  sel.addEventListener('mousedown', applyOptionStyles);
+  sel.addEventListener('keydown', applyOptionStyles);
+  window.addEventListener('load', applyOptionStyles);
+})();
+
+function enviarSetpoint() {
+    const setpointVal = parseFloat(document.getElementById("setpoint").value);
+    const setpointTempAtual = parseFloat(document.getElementById("tempAtual").value);
+    const setpointTempExt = parseFloat(document.getElementById("tempExt").value);
+    const setpointCarga = parseFloat(document.getElementById("carga").value);
+
+    if (isNaN(setpointVal) || isNaN(setpointTempAtual) || isNaN(setpointTempExt) || isNaN(setpointCarga)) {
+        alert("Preencha todos os campos com valores válidos.");
+        return;
+    }
+
+    const payloadString = 
+        `${setpointVal.toFixed(2)};` +
+        `${setpointTempAtual.toFixed(2)};` +
+        `${setpointTempExt.toFixed(2)};` +
+        `${setpointCarga.toFixed(2)}`;
+
+    socket.emit('sendSetpoint', payloadString); 
+    
+    alert(`Comando enviado: ${payloadString}`);
+}
+
+</script>
+</body>
+</html>
