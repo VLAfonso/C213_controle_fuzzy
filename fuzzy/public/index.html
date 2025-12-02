@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fuzzy MQTT Dashboard</title>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .card {
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 6px;
+        }
+
+        #temp-card {
+            background-color: #e6f7ff;
+            border-left: 5px solid #1890ff;
+        }
+
+        #alert-card {
+            background-color: #e6f7ff;
+            border-left: 5px solid #1890ff;
+            transition: all 0.5s;
+        }
+
+        /* CRAC green card */
+        #crac-card {
+            background-color: #f6ffed;
+            border-left: 5px solid #52c41a;
+        }
+
+        /* Potência */
+        .gauge-bar-container {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            height: 30px;
+        }
+
+        .gauge-bar {
+            height: 100%;
+            width: 0%;
+            background-color: #fa8c16;
+            transition: width 0.5s ease-out;
+            text-align: right;
+            line-height: 30px;
+            color: white;
+            font-weight: bold;
+            padding-right: 5px;
+        }
+
+        /* Setpoint */
+        #setpoint-area {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #fffbe6;
+            border-left: 5px solid #faad14;
+            border-radius: 6px;
+        }
+
+        #setpoint {
+            width: 100px;
+            padding: 6px;
+            margin-right: 10px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 7px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            background-color: #1890ff;
+            color: white;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+
+        <h1>📊 Dashboard - Controle Fuzzy via MQTT</h1>
+
+        <!-- ALERTA -->
+        <div id="alert-card" class="card">
+            <h2>⚠️ Status de Alerta</h2>
+            <p id="alert-status">Tudo normal</p>
+        </div>
+
+        <!-- POTÊNCIA CRAC -->
+        <div id="crac-card" class="card">
+            <h2>⚡ Potência CRAC (Saída Fuzzy)</h2>
+
+            <div class="gauge-bar-container">
+                <div id="power-bar" class="gauge-bar"></div>
+            </div>
+
+            <p>Potência Atual: <strong id="current-power">--</strong>%</p>
+        </div>
+
+        <!-- DADOS -->
+        <div id="temp-card" class="card">
+            <h2>🌡️ Dados Atuais</h2>
+            <p>Temperatura: <strong id="current-temp">--</strong> °C</p>
+            <p>Erro: <strong id="current-error">--</strong></p>
+            <p>Última Atualização: <span id="last-update">--</span></p>
+        </div>
+
+        <!-- GRÁFICOS -->
+        <div class="card">
+            <h2>📈 Gráfico de Temperatura</h2>
+            <canvas id="tempChart"></canvas>
+        </div>
+
+        <div class="card">
+            <h2>📉 Gráfico de Erro</h2>
+            <canvas id="errorChart"></canvas>
+        </div>
+
+    </div>
+
+    <!-- Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+
+    <!-- Lógica do Dashboard -->
+    <script src="dashboard.js"></script>
+
+    <!-- Função de Envio de Setpoint -->
+    <script>
+        function enviarSetpoint() {
+            const setpointVal = parseFloat(document.getElementById("setpoint").value);
+
+            if (isNaN(setpointVal)) {
+                alert("Valor de Setpoint inválido.");
+                return;
+            }
+
+            socket.emit('sendSetpoint', setpointVal.toFixed(2));
+
+            alert(`Setpoint enviado: ${setpointVal.toFixed(1)}°C`);
+        }
+    </script>
+</body>
+</html>
